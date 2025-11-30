@@ -1,0 +1,100 @@
+trigger:
+  - main
+
+variables:
+  tf_working_directory: "$(System.DefaultWorkingDirectory)"
+
+stages:
+
+# -----------------------------
+# Stage 1: Terraform Init
+# -----------------------------
+- stage: TerraformInit
+  displayName: "Terraform Init"
+  jobs:
+    - job: init
+      displayName: "Initialize Terraform Backend"
+      pool:
+        vmImage: "ubuntu-latest"
+
+      steps:
+        - checkout: self
+
+        # Install Terraform
+        - task: TerraformInstaller@1
+          inputs:
+            terraformVersion: "latest"
+
+        # Terraform Init
+        - script: |
+            terraform -version
+            terraform init \
+              -backend-config="resource_group_name=$(backend_rg)" \
+              -backend-config="storage_account_name=$(backend_storage)" \
+              -backend-config="container_name=tfstate" \
+              -backend-config="key=terraform.tfstate"
+          workingDirectory: $(tf_working_directory)
+          displayName: "Terraform Init"
+
+# -----------------------------
+# Stage 2: Terraform Plan
+# -----------------------------
+- stage: TerraformPlan
+  displayName: "Terraform Plan"
+  dependsOn: TerraformInit
+  jobs:
+    - job: plan
+      displayName: "Generate Terraform Plan"
+      pool:
+        vmImage: "ubuntu-latest"
+
+      steps:
+        - checkout: self
+
+        # Install Terraform
+        - task: TerraformInstaller@1
+          inputs:
+            terraformVersion: "latest"
+
+        # Terraform Plan
+        - script: |
+            terraform plan \
+              -var "resource_group_name=$(rg_name)" \
+              -var "location=$(location)" \
+              -out=tfplan
+          workingDirectory: $(tf_working_directory)
+          displayName: "Terraform Plan"
+
+        # Publish Plan Artifact
+        - publish: tfplan
+          artifact: terraform_plan
+  
+# -----------------------------
+# Stage 3: Terraform Apply
+# -----------------------------
+- stage: TerraformApply
+  displayName: "Terraform Apply"
+  dependsOn: TerraformPlan
+  condition: succeeded()
+  jobs:
+    - job: apply
+      displayName: "Apply Terraform Changes"
+      pool:
+        vmImage: "ubuntu-latest"
+
+      steps:
+        - checkout: self
+
+        # Install Terraform
+        - task: TerraformInstaller@1
+          inputs:
+            terraformVersion: "latest"
+
+        # Download Plan
+        - download: current
+          artifact: terraform_plan
+
+        # Terraform Apply
+        - script: terraform apply -auto-approve tfplan
+          workingDirectory: $(tf_working_directory)
+          displayName: "Terraform Apply"
